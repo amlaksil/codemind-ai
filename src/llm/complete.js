@@ -1,9 +1,9 @@
 import { AiError } from '../errors.js';
 import { isConfigured, log, models } from '../runtime.js';
-import { cachedTokensOf, costFor } from './catalog.js';
+import { cachedTokensOf, costFor, hasPrice } from './catalog.js';
 import { flexFor } from './providers.js';
 import { clientFor, FLEX_TIMEOUT_MS } from './client.js';
-import { isFlexUnavailable, isOutOfCredits, isTransient } from './errors.js';
+import { isFlexUnavailable, isOutOfCredits, isTimeout, isTransient, retryDelayMs } from './errors.js';
 import { buildRequest, unfence } from './request.js';
 import { recordUsage } from './usage.js';
 
@@ -12,6 +12,9 @@ import { recordUsage } from './usage.js';
 // ref, requestId }) so a call is attributable without the caller knowing how.
 
 const MAX_ATTEMPTS = 3;
+
+// Models already warned about having no price (catalog.js PRICES): their calls are metered at zero.
+const unpriced = new Set();
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -41,6 +44,12 @@ export async function complete(
   const flex = serviceTier === 'flex' && flexFor(model);
   const started = Date.now();
   let lastErr;
+  // What every answered attempt was billed for, also when its answer could not be used.
+  const billed = { tokensIn: 0, tokensOut: 0, cachedIn: 0 };
+  if (!hasPrice(model) && !unpriced.has(model)) {
+    unpriced.add(model);
+    log().warn({ model }, 'model has no price in the catalog; its calls are metered at $0');
+  }
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
@@ -49,12 +58,24 @@ export async function complete(
         flex ? { timeout: FLEX_TIMEOUT_MS } : undefined
       );
 
-      const text = unfence(response.choices[0]?.message?.content?.trim() || '');
+      const choice = response.choices[0];
+      const text = unfence(choice?.message?.content?.trim() || '');
       const tokensIn = response.usage?.prompt_tokens || 0;
       const tokensOut = response.usage?.completion_tokens || 0;
       const cachedIn = cachedTokensOf(response.usage);
       const usage = { model, tokensIn, tokensOut, cachedIn, costUsd: costFor(model, tokensIn, tokensOut, { flex, cachedIn }) };
+      billed.tokensIn += tokensIn;
+      billed.tokensOut += tokensOut;
+      billed.cachedIn += cachedIn;
 
+      // A caller that allows an empty answer judges a refused or cut-off one itself (enrichment
+      // validates it as a failed attempt).
+      if (!allowEmpty) {
+        if (choice?.message?.refusal) throw new AiError(422, 'ai_refused', 'The AI declined to answer this request.');
+        // Cut off at the token limit (a reasoning model can spend it all before answering): the text
+        // is incomplete, and a JSON answer would only look malformed.
+        if (choice?.finish_reason === 'length') throw new AiError(502, 'ai_truncated', "The AI's answer was cut off before it finished. Try again.");
+      }
       if (!text && !allowEmpty) throw AiError.upstream('The model returned an empty response');
       let data;
       if (json && text) {
@@ -72,15 +93,17 @@ export async function complete(
       lastErr = err;
       const status = err.status || err.statusCode;
       // A refused flex request is not retried here: the caller leaves the work for a later cycle.
-      if (err instanceof AiError || isOutOfCredits(err) || isFlexUnavailable(err) || !isTransient(err) || attempt === MAX_ATTEMPTS) break;
+      // Nor is a flex request that timed out: each attempt already waited up to FLEX_TIMEOUT_MS.
+      if (err instanceof AiError || isOutOfCredits(err) || isFlexUnavailable(err) || (flex && isTimeout(err)) || !isTransient(err) || attempt === MAX_ATTEMPTS) break;
       log().warn({ status, attempt, model, err: err.message }, 'model call failed, retrying');
-      await sleep(500 * 2 ** (attempt - 1));
+      await sleep(retryDelayMs(err, attempt));
     }
   }
 
   await recordUsage({
     ...meta,
     model,
+    ...billed,
     latencyMs: Date.now() - started,
     ok: false,
     flex,

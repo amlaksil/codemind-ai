@@ -13,13 +13,21 @@ export const DEFAULT_MODELS = {
   parse: { model: 'gpt-5.6-luna', fallbackModel: 'gpt-5.6-luna', effort: 'none', fallbackEffort: 'low' },
 };
 
+const RAW = Symbol('raw chat.completions response');
+
 /**
- * installFakeLlm(answers, { models }) → { calls, events, restore }
- * `answers` is a list used in order, one per call, or a function (request, index) → answer. An
- * answer is a string (the message content), an object (sent as its JSON), or an Error to throw.
- * A call past the end of the list fails the test.
+ * An answer given as the whole chat.completions response, for tests of what a response carries
+ * besides its content: finish_reason, refusal, real usage. Usage defaults to the fake's own.
  */
-export function installFakeLlm(answers, { models = DEFAULT_MODELS } = {}) {
+export const rawResponse = (response) => ({ [RAW]: response });
+
+/**
+ * installFakeLlm(answers, { models, logger }) → { calls, events, restore }
+ * `answers` is a list used in order, one per call, or a function (request, index) → answer. An
+ * answer is a string (the message content), an object (sent as its JSON), a rawResponse(…), or an
+ * Error to throw. A call past the end of the list fails the test.
+ */
+export function installFakeLlm(answers, { models = DEFAULT_MODELS, logger } = {}) {
   const calls = [];
   const events = [];
   const answerFor = typeof answers === 'function' ? answers : (_, i) => {
@@ -34,6 +42,7 @@ export function installFakeLlm(answers, { models = DEFAULT_MODELS } = {}) {
           calls.push({ request: structuredClone(request), options: options ?? null });
           const answer = await answerFor(request, index);
           if (answer instanceof Error) throw answer;
+          if (answer?.[RAW]) return { usage: { prompt_tokens: 1000, completion_tokens: 100 }, ...answer[RAW] };
           const content = typeof answer === 'string' ? answer : JSON.stringify(answer);
           return { choices: [{ message: { content } }], usage: { prompt_tokens: 1000, completion_tokens: 100 } };
         },
@@ -44,6 +53,7 @@ export function installFakeLlm(answers, { models = DEFAULT_MODELS } = {}) {
     providers: { openai: { client }, dashscope: { client }, ollama: { client } },
     models: () => models,
     onUsage: (event) => events.push(event),
+    logger,
   });
   return {
     calls,

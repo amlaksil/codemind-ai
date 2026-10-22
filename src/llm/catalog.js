@@ -55,12 +55,23 @@ export const MODEL_CATALOG = Object.entries(PRICES).map(([id, price]) => ({
 }));
 
 /**
+ * A model's price. Model names are matched in any case; "-cloud" is how a local Ollama names the
+ * same cloud model, and a dated snapshot ("gpt-5-mini-2025-08-07") is priced as its model.
+ */
+function priceOf(model) {
+  const name = String(model || '').toLowerCase().replace(/-cloud$/, '');
+  return PRICES[name] || PRICES[name.replace(/-\d{4}-\d{2}-\d{2}$/, '')];
+}
+
+/** Whether a call to `model` can be priced; one that cannot is metered at zero. */
+export const hasPrice = (model) => Boolean(priceOf(model));
+
+/**
  * USD for one call; `cachedIn` of the input tokens are billed at the cached price. The Batch API
  * and the flex tier bill half.
  */
 export function costFor(model, tokensIn, tokensOut, { batch = false, flex = false, cachedIn = 0 } = {}) {
-  // "-cloud" is how a local Ollama names the same cloud model.
-  const p = PRICES[model] || PRICES[String(model || '').replace(/-cloud$/, '')];
+  const p = priceOf(model);
   if (!p) return 0;
   const cached = Math.min(Math.max(cachedIn, 0), tokensIn);
   const input = (tokensIn - cached) * p.in + cached * (p.cached ?? p.in);

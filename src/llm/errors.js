@@ -28,3 +28,31 @@ export function isOutOfCredits(err) {
     /no credits remaining|exceeded your current quota|arrearage|overdue payment/i.test(err?.message || '')
   );
 }
+
+/** A call that ran out of time (no answer, so nothing was billed). */
+export function isTimeout(err) {
+  return err instanceof OpenAI.APIConnectionTimeoutError;
+}
+
+// The longest a retry waits, whatever a provider's Retry-After asks: past this the caller is better
+// served by the error than by a request that hangs.
+const MAX_RETRY_WAIT_MS = 30_000;
+
+function headerOf(err, name) {
+  const headers = err?.headers;
+  const value = typeof headers?.get === 'function' ? headers.get(name) : headers?.[name];
+  return value == null || String(value).trim() === '' ? NaN : Number(value);
+}
+
+/**
+ * How long to wait before attempt `attempt + 1`: what the provider's Retry-After (or OpenAI's
+ * retry-after-ms) asks, within a cap; else an exponential backoff with jitter, so callers that
+ * failed together do not all retry at the same moment.
+ */
+export function retryDelayMs(err, attempt, random = Math.random) {
+  const ms = headerOf(err, 'retry-after-ms');
+  if (ms >= 0) return Math.min(ms, MAX_RETRY_WAIT_MS);
+  const seconds = headerOf(err, 'retry-after');
+  if (seconds >= 0) return Math.min(seconds * 1000, MAX_RETRY_WAIT_MS);
+  return Math.round(500 * 2 ** (attempt - 1) * (0.5 + random() * 0.5));
+}
