@@ -13,6 +13,10 @@ const loadMammoth = () => (mammothLoading ??= import('mammoth').then((m) => m.de
 
 // A resume is a few pages; anything past this is not one, and every page costs time on the event loop.
 const MAX_PDF_PAGES = 40;
+
+// Reject oversized uploads before PDF/DOCX parsing consumes resources.
+export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+
 // Nor is more text than this (a long resume is 20,000 characters). The text is stored with the
 // resume twice over and read back on every job page, and a 10 MB text file would not even fit a
 // document.
@@ -85,8 +89,14 @@ async function readText(buffer, mimeType, name) {
 
 /** Plain text from an uploaded resume buffer, by MIME type or extension. A broken, protected or outsized file is the user's to fix (400). */
 export async function extractText(buffer, { mimeType = '', filename = '' } = {}) {
+  if (buffer.byteLength > MAX_FILE_BYTES) {
+    throw AiError.badRequest('This file is too large. Upload a resume smaller than 10 MB.');
+  }
+
   const text = await readText(buffer, mimeType, filename.toLowerCase());
-  if (text.length > MAX_TEXT_CHARS) throw AiError.badRequest('This file holds far more text than a resume. Upload the resume on its own.');
+  if (text.length > MAX_TEXT_CHARS) {
+    throw AiError.badRequest('This file holds far more text than a resume. Upload the resume on its own.');
+  }
   return text;
 }
 

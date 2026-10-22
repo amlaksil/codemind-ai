@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractText, pageText } from './textExtract.js';
+import { extractText, pageText, MAX_FILE_BYTES } from './textExtract.js';
 
 /** A one-page PDF drawing each [x, y, word] on its own, with no space characters, as LaTeX and Typst do. */
 function wordsPdf(words) {
@@ -44,4 +44,16 @@ test('pageText joins touching pieces, spaces separated ones, and breaks on a new
   assert.equal(pageText([item('Kub', 0, 50, 15), item('ernetes', 15.2, 50, 35), item('and', 53, 50, 15), item('Go', 0, 30, 10)]), 'Kubernetes and\nGo');
   // A piece that already carries its space gets no second one.
   assert.equal(pageText([item('Senior ', 0, 50, 35), item('engineer', 38, 50, 40)]), 'Senior engineer');
+});
+
+test('rejects oversized files before attempting extraction', async () => {
+  const oversized = Buffer.alloc(MAX_FILE_BYTES + 1);
+
+  await assert.rejects(
+    extractText(oversized, { mimeType: 'application/pdf' }),
+    (err) =>
+      err.status === 400 &&
+      err.code === 'bad_request' &&
+      /too large/i.test(err.message)
+  );
 });
