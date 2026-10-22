@@ -1,5 +1,10 @@
-import PDFDocument from 'pdfkit';
 import { resumeTemplate } from './templates.js';
+
+// pdfkit is loaded on the first PDF drawn, not with the module: it brings its font parser and the
+// standard fonts' metrics, a good deal of heap, and most processes (a worker, a web process whose
+// members download nothing) never draw one. The promise is kept so a second PDF does not import again.
+let pdfkitLoading = null;
+const loadPdfDocument = () => (pdfkitLoading ??= import('pdfkit').then((m) => m.default));
 
 // The same document model the .docx is built from (docx.js), drawn as a PDF in the same
 // template: one column, real text, nothing in headers or footers, so a parser reads it as it
@@ -35,8 +40,21 @@ export function pdfSafe(text) {
   return out;
 }
 
+/**
+ * Whether pdfSafe would leave a letter out of `text` altogether (a name in Chinese, a city in
+ * Cyrillic), not just its accent: a file that goes to an employer is then better sent as .docx.
+ */
+export function pdfDropsLetters(text) {
+  for (const ch of String(text ?? '')) {
+    if (!/\p{L}/u.test(ch)) continue;
+    if (!pdfSafe(ch)) return true;
+  }
+  return false;
+}
+
 /** Draw a document model (docx.js formResumeModel / parseTailoredResume) as a PDF. Resolves to its bytes. */
-export function renderResumePdf({ model, template }) {
+export async function renderResumePdf({ model, template }) {
+  const PDFDocument = await loadPdfDocument();
   const t = resumeTemplate(template);
   const margin = t.margins * 72;
   const doc = new PDFDocument({
@@ -146,6 +164,39 @@ export function renderResumePdf({ model, template }) {
         gap(t.spacing.paragraph);
       }
     }
+  }
+
+  doc.end();
+  return done;
+}
+
+/**
+ * A cover letter's text as a PDF, laid out as its .docx is (docx.js buildCoverLetterDocx): a
+ * blank line starts a paragraph, a single line break stays one, in the template's body font, size
+ * and margins (at least an inch). Resolves to its bytes.
+ */
+export async function renderCoverLetterPdf({ text, template }) {
+  const PDFDocument = await loadPdfDocument();
+  const t = resumeTemplate(template);
+  const margin = Math.max(t.margins, 1) * 72;
+  const doc = new PDFDocument({ size: 'LETTER', margin, info: { Title: 'Cover letter', Creator: 'CodeMind Jobs' } });
+  const chunks = [];
+  const done = new Promise((resolve, reject) => {
+    doc.on('data', (c) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+  });
+
+  const width = doc.page.width - 2 * margin;
+  const paragraphs = String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .split(/\n\s*\n/)
+    .map((p) => p.split('\n').map((line) => pdfSafe(line).trimEnd()).join('\n'))
+    .filter((p) => p.trim());
+  doc.font(fontsFor(t.fonts.body).regular).fontSize(t.sizes.body).fillColor(`#${t.colors.text}`);
+  for (const paragraph of paragraphs) {
+    doc.text(paragraph, margin, doc.y, { width, lineGap: 1 });
+    doc.y += t.sizes.body; // one blank line between paragraphs
   }
 
   doc.end();

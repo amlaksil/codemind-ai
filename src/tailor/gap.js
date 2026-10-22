@@ -244,5 +244,7 @@ export function applyGapLines(tailored, sourceForm, answer, { confirmedKeywords 
     done.add(line.id);
     applied += 1;
   }
-  return { applied, form, changes, estimates, rejected };
+  // `answered`: the gap ids the lines taken were written for, so a round that runs without a
+  // score in between (pipeline.js scoreRounds 'ends') can mark them met before the next one.
+  return { applied, form, changes, estimates, rejected, answered: [...done] };
 }

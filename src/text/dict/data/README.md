@@ -13,7 +13,7 @@ Do not edit the JSON by hand. Regenerate it from a freehire checkout with
 
     npm run gen:skill-dict -- ../../freehire-main
 
-(a generator in the CodeMind app), and commit the result.
+(`src/cli/dict/genSkills.js`), and commit the result.
 
 # Industry dictionary
 
@@ -25,7 +25,7 @@ not have. Do not edit the JSON by hand; regenerate it with
 
     npm run gen:industry-dict -- ../../freehire-main
 
-(a generator in the CodeMind app), and commit the result. `dict/industries.js` reads it and
+(`src/cli/dict/genIndustries.js`), and commit the result. `dict/industries.js` reads it and
 layers our own entries over it: LinkedIn's industry taxonomy, which reaches us through Remote
 Rocketship and Indeed and which freehire never had to read, plus `consulting`, the commonest
 label our sources send and one freehire's vocabulary does not name.
@@ -49,4 +49,4 @@ table in `countries.js` against it. Do not edit the JSON by hand; regenerate it 
 
     npm run gen:country-dict -- ../../freehire-main
 
-(a generator in the CodeMind app), and commit the result.
+(`src/cli/dict/genCountries.js`), and commit the result.

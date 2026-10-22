@@ -2,6 +2,7 @@ import { quickScoreResume } from '../ats/service.js';
 import { hasKeyword, keywordList, sameKeyword, uniqueKeywords } from '../text/keywords.js';
 import { structuredResumeToText } from '../resume/structuredResume.js';
 import { fillTailoringGaps, tailorResumeForm } from './service.js';
+import { markAnswered } from './requirements.js';
 import { postingTerms, splitAssumedTerms, tailorMode, tailorStyle, withoutCuts } from './index.js';
 
 // The whole tailoring of one resume for one job, as the calls run it: the source scored (unless
@@ -13,7 +14,15 @@ import { postingTerms, splitAssumedTerms, tailorMode, tailorStyle, withoutCuts }
 // re-run, 2026-10-06), so a gap pass that fixed two verdicts was thrown away when its score
 // landed a point lower. A pass is kept when the score rose, or when more requirements and
 // skills are met and the score fell no further than the noise.
+//
+// `scoreRounds` is how often the scorer runs inside the loop. 'each' (the original) scores after
+// every gap pass and keeps or drops the pass by that score: four scores for three passes. 'ends'
+// scores the rewrite and the finished resume only: the passes run on the rewrite's verdicts,
+// each marking the gaps it answered met for the next (requirements.js markAnswered), and the
+// finished resume is kept over the rewrite by the same progress rule, once. Two scores instead
+// of four, at the cost of the per-pass gate, which the scorer's own noise makes a weak one.
 const SCORE_NOISE = 3;
+export const SCORE_ROUNDS = ['each', 'ends'];
 const metCount = (scoring) =>
   [...(scoring?.requirements || []), ...(scoring?.requiredSkillVerdicts || []), ...(scoring?.preferredSkillVerdicts || [])].filter((v) => v?.verdict === 'met').length;
 /** True when the gap pass that produced `next` moved the tailoring forward from `prior`. */
@@ -49,8 +58,11 @@ export async function runTailoring({
   instructions = '',
   model,
   meta = {},
+  // 'flex' for a tailoring nobody is waiting on (Smart Apply): every call rides OpenAI's half-price tier.
+  serviceTier,
+  scoreRounds = 'each',
 }) {
-  const before = scoring || (await quickScoreResume(form, job, meta));
+  const before = scoring || (await quickScoreResume(form, job, meta, { serviceTier }));
 
   // Every keyword the rewrite could be tempted to add. Asked and not confirmed means blocked.
   const confirmed = confirmedKeywords || [];
@@ -82,18 +94,18 @@ export async function runTailoring({
     ? candidates.filter((k) => !hasKeyword(originalText, k) && !allowed.some((c) => sameKeyword(c, k)))
     : [];
 
-  const request = { confirmedKeywords, blockedKeywords, evidence, style, instructions, model, meta };
+  const request = { confirmedKeywords, blockedKeywords, evidence, style, instructions, model, meta, serviceTier };
   let tailored = await tailorResumeForm(form, job, { ...request, scoring: before, assumedKeywords: assumed, optionalKeywords: optional });
 
   // The rewrite is judged against the source's own verdicts, so its score moves only for what it changed.
   const beforeRequirements = typeof before.toObject === 'function' ? before.toObject().requirements : before.requirements;
   const prior = beforeRequirements?.length ? { requirements: beforeRequirements, resumeText: structuredResumeToText(form) } : null;
-  let after = await quickScoreResume(tailored.form, job, meta, { prior });
+  let after = await quickScoreResume(tailored.form, job, meta, { prior, serviceTier });
   // A rewrite that scores below the resume it started from lost more by cutting than it gained
   // by rewording. Put the cuts back, keep the rewording, and keep whichever scores higher.
   if (after.score < before.score && tailored.changes.some((c) => c.kind === 'removed')) {
     const restored = withoutCuts(form, tailored.form, tailored.changes);
-    const rescored = await quickScoreResume(restored.form, job, meta, { prior });
+    const rescored = await quickScoreResume(restored.form, job, meta, { prior, serviceTier });
     if (rescored.score > after.score) {
       after = rescored;
       tailored.form = restored.form;
@@ -110,21 +122,50 @@ export async function runTailoring({
   // The mode's passes at most: each reaches what the one before did not, and the passes stop
   // when nothing goes in, or when the score does not rise more often than the mode tolerates
   // (score first rolls once more after a flat pass; the others stop).
+  const gapOptions = (scoring) => ({
+    scoring,
+    confirmedKeywords: confirmed,
+    evidence,
+    assumedKeywords: assumedAll,
+    protectedKeywords: [...(job.skills || []), ...(job.preferredSkills || []), ...postingTerms(job.description, keywordList(scoring.matchedKeywords))],
+    style,
+    model: request.model,
+    meta,
+    serviceTier,
+  });
+
+  if (scoreRounds === 'ends') {
+    // The passes run on the rewrite's verdicts, each taking the gaps the one before answered
+    // off the list; nothing is scored until the passes are done, and the finished resume stands
+    // or the rewrite does, by one score.
+    const rewrite = tailored;
+    let verdicts = after;
+    let applied = 0;
+    for (let pass = 0; after.score < mode.target && pass < mode.gapPasses; pass += 1) {
+      try {
+        const filled = await fillTailoringGaps(tailored, form, job, gapOptions(verdicts));
+        if (!filled.applied) break;
+        tailored = filled;
+        applied += filled.applied;
+        verdicts = markAnswered(verdicts, filled.answered, { preferred: mode.preferredGaps });
+      } catch {
+        break; // the attempt so far stands
+      }
+    }
+    if (applied > 0) {
+      const final = await quickScoreResume(tailored.form, job, meta, { prior, serviceTier });
+      if (gapPassProgressed(after, final)) after = final;
+      else tailored = rewrite;
+    }
+    return { before, after, tailored, style, confirmed, candidates, assumed, assumedAll, split };
+  }
+
   let flat = 0;
   for (let pass = 0; after.score < mode.target && pass < mode.gapPasses; pass += 1) {
     try {
-      const filled = await fillTailoringGaps(tailored, form, job, {
-        scoring: after,
-        confirmedKeywords: confirmed,
-        evidence,
-        assumedKeywords: assumedAll,
-        protectedKeywords: [...(job.skills || []), ...(job.preferredSkills || []), ...postingTerms(job.description, keywordList(after.matchedKeywords))],
-        style,
-        model: request.model,
-        meta,
-      });
+      const filled = await fillTailoringGaps(tailored, form, job, gapOptions(after));
       if (!filled.applied) break;
-      const rescored = await quickScoreResume(filled.form, job, meta, { prior });
+      const rescored = await quickScoreResume(filled.form, job, meta, { prior, serviceTier });
       if (!gapPassProgressed(after, rescored)) {
         flat += 1;
         if (flat > mode.flatPasses) break;

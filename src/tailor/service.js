@@ -28,7 +28,7 @@ import { GAP_RESPONSE_FORMAT, REPAIR_RESPONSE_FORMAT, TAILOR_RESPONSE_FORMAT } f
 export async function tailorResumeForm(
   form,
   job,
-  { scoring = null, confirmedKeywords = null, assumedKeywords = [], optionalKeywords = [], evidence = [], blockedKeywords = [], instructions = '', style, model, meta = {} } = {}
+  { scoring = null, confirmedKeywords = null, assumedKeywords = [], optionalKeywords = [], evidence = [], blockedKeywords = [], instructions = '', style, model, meta = {}, serviceTier } = {}
 ) {
   style = tailorStyle(style);
   const prompt = buildTailorPrompt({ form, job, scoring, confirmedKeywords, assumedKeywords, optionalKeywords, evidence, instructions, style });
@@ -37,7 +37,7 @@ export async function tailorResumeForm(
   return withFallback(
     async ({ temperature }) => {
       const { data } = await complete(
-        { model, reasoningEffort, system: prompt.system, user: prompt.user, json: true, responseFormat: TAILOR_RESPONSE_FORMAT, temperature },
+        { model, reasoningEffort, system: prompt.system, user: prompt.user, json: true, responseFormat: TAILOR_RESPONSE_FORMAT, temperature, serviceTier },
         { ...meta, kind: 'tailor', promptVersion: PROMPT_VERSIONS.tailor }
       );
       // What the job asks for, by every account of it: a line or a skill that names one is kept.
@@ -61,7 +61,7 @@ export async function tailorResumeForm(
       if (!data?.resume || (tailored.form.experience.length > 0 && tailored.pairedExperience === 0)) {
         throw AiError.upstream('The model did not return a rewritten resume');
       }
-      const final = await repairTailoring({ tailored, source: form, job, model, reasoningEffort, protectedKeywords, style, meta });
+      const final = await repairTailoring({ tailored, source: form, job, model, reasoningEffort, protectedKeywords, style, meta, serviceTier });
       return {
         form: final.form,
         changes: final.changes,
@@ -89,13 +89,13 @@ export async function tailorResumeForm(
  * @param {{ scoring: import('../types.js').Scoring, confirmedKeywords?: string[], evidence?: object[], assumedKeywords?: string[], protectedKeywords?: string[], style?: import('../types.js').TailorStyle, model: string, meta?: import('../types.js').CallMeta }} options
  * @returns {Promise<object>} The tailoring with `applied`, how many lines went in, and `rejected`.
  */
-export async function fillTailoringGaps(tailored, form, job, { scoring, confirmedKeywords = [], evidence = [], assumedKeywords = [], protectedKeywords = [], style, model, meta = {} }) {
+export async function fillTailoringGaps(tailored, form, job, { scoring, confirmedKeywords = [], evidence = [], assumedKeywords = [], protectedKeywords = [], style, model, meta = {}, serviceTier }) {
   style = tailorStyle(style);
   // The skills it may write in: what the user confirmed and what the tailoring was allowed to assume.
   const prompt = buildGapPrompt({ tailoredForm: tailored.form, scoring, job, estimates: tailored.estimates, allowedTerms: [...confirmedKeywords, ...assumedKeywords], style });
   if (!prompt) return { ...tailored, applied: 0 };
   const { data } = await complete(
-    { model, reasoningEffort: tailorEffort(model), system: prompt.system, user: prompt.user, json: true, responseFormat: GAP_RESPONSE_FORMAT, temperature: 0.3 },
+    { model, reasoningEffort: tailorEffort(model), system: prompt.system, user: prompt.user, json: true, responseFormat: GAP_RESPONSE_FORMAT, temperature: 0.3, serviceTier },
     { ...meta, kind: 'tailor', promptVersion: `${PROMPT_VERSIONS.tailor}+gaps` }
   );
   const requirements = Array.isArray(job?.requirements) ? job.requirements : [];
@@ -112,7 +112,7 @@ export async function fillTailoringGaps(tailored, form, job, { scoring, confirme
       const targets = lines.map((l, id) => ({ id, role: l.role, text: l.text, problems: ['it repeats the posting\'s wording; say what the candidate did, naming the product or system, in their own words'] }));
       const prompt = buildRepairPrompt(targets, { style });
       const { data: fixed } = await complete(
-        { model, reasoningEffort: tailorEffort(model), system: prompt.system, user: prompt.user, json: true, responseFormat: REPAIR_RESPONSE_FORMAT, temperature: 0.2 },
+        { model, reasoningEffort: tailorEffort(model), system: prompt.system, user: prompt.user, json: true, responseFormat: REPAIR_RESPONSE_FORMAT, temperature: 0.2, serviceTier },
         { ...meta, kind: 'tailor', promptVersion: `${PROMPT_VERSIONS.tailor}+gaps-repair` }
       );
       const byId = new Map((Array.isArray(fixed?.lines) ? fixed.lines : []).filter((l) => Number.isInteger(l?.id) && typeof l.text === 'string' && l.text.trim()).map((l) => [l.id, l.text]));
@@ -137,7 +137,7 @@ export async function fillTailoringGaps(tailored, form, job, { scoring, confirme
  * flagged; a failed call leaves the tailoring as it was. Recorded as the tailor prompt's
  * "+repair" version, so its cost shows on its own.
  */
-async function repairTailoring({ tailored, source, job, model, reasoningEffort, protectedKeywords, style, meta }) {
+async function repairTailoring({ tailored, source, job, model, reasoningEffort, protectedKeywords, style, meta, serviceTier }) {
   const requirements = Array.isArray(job?.requirements) ? job.requirements : [];
   const description = job?.description || '';
   const targets = repairTargets(tailored, source, { requirements, description, style });
@@ -145,7 +145,7 @@ async function repairTailoring({ tailored, source, job, model, reasoningEffort, 
   try {
     const prompt = buildRepairPrompt(targets, { style });
     const { data } = await complete(
-      { model, reasoningEffort, system: prompt.system, user: prompt.user, json: true, responseFormat: REPAIR_RESPONSE_FORMAT, temperature: 0.2 },
+      { model, reasoningEffort, system: prompt.system, user: prompt.user, json: true, responseFormat: REPAIR_RESPONSE_FORMAT, temperature: 0.2, serviceTier },
       { ...meta, kind: 'tailor', promptVersion: `${PROMPT_VERSIONS.tailor}+repair` }
     );
     const repaired = applyRepairs(tailored, targets, data, { protectedKeywords, requirements, description, style });

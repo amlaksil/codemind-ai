@@ -30,11 +30,13 @@ export { readBatch, startBatch } from './llm/batch.js';
 export { parseResumeText } from './parse/service.js';
 export { extractJobRequirements, quickScoreResume, scoreVersion } from './ats/service.js';
 export { fillTailoringGaps, tailorResumeForm } from './tailor/service.js';
-export { runTailoring } from './tailor/pipeline.js';
+export { runTailoring, SCORE_ROUNDS } from './tailor/pipeline.js';
 export { estimateClause, TAILOR_STYLES, tailorStyle, withEstimate } from './tailor/index.js';
 export { FIELD_NOTE_CATEGORIES } from './tailor/fieldNotes.js';
 export { generateApplicationAnswer, generateApplicationAnswers, generateCoverLetter, generateReferral } from './writing/letters/index.js';
+export { BLOCKING_INTRO_ISSUES, INSTRUCTIONS_LIMIT, INTRO_MAX_WORDS, SUBJECT_LIMIT, founderIntroIssues, generateFounderIntro, stripGreetingAndSignoff, wordCount } from './writing/letters/index.js';
 export { generateInterviewPrep, reviewInterviewAnswer } from './writing/interview/service.js';
+export { interpretScreeningQuestions, QUESTIONS_PER_CALL as SCREENING_QUESTIONS_PER_CALL } from './writing/screening/interpret.js';
 export { resumeWarnings } from './checks/index.js';
 export { fenced } from './text/fence.js';
 

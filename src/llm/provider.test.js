@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import OpenAI from 'openai';
 import { buildRequest, costFor, isFlexUnavailable, isOutOfCredits, isReasoningModel, isTransient, providerFor, unfence } from './index.js';
+import { flexFor } from './providers.js';
 
 const MESSAGES = [
   { role: 'system', content: 's' },
@@ -50,6 +51,14 @@ test('Qwen models go to Model Studio; "minimal" turns thinking off and any other
   );
   assert.equal(buildRequest({ system: 's', user: 'u', model: 'qwen3.8-flash', reasoningEffort: 'low' }).enable_thinking, true);
   assert.equal('enable_thinking' in buildRequest({ system: 's', user: 'u', model: 'qwen3.8-flash' }), false);
+});
+
+test('the flex tier goes only to the model families that take it: GPT-5 and GPT-6, never GPT-4.1 or another provider', () => {
+  for (const model of ['gpt-5-nano', 'gpt-5-mini', 'gpt-5.6-luna', 'gpt-6-luna', 'o4-mini']) assert.equal(flexFor(model), true, model);
+  for (const model of ['gpt-4.1-mini', 'gpt-4.1', 'gpt-4o-mini', 'qwen3.7-flash', 'gpt-oss:120b', '']) assert.equal(flexFor(model), false, model);
+  assert.equal(buildRequest({ system: 's', user: 'u', model: 'gpt-5-nano', serviceTier: 'flex' }).service_tier, 'flex');
+  // Asked for flex on a model that refuses it: the request goes out on the standard tier, no 400, no fallback.
+  assert.equal('service_tier' in buildRequest({ system: 's', user: 'u', model: 'gpt-4.1-mini', serviceTier: 'flex' }), false);
 });
 
 test('an account without credits is told apart from a rate limit, so it is not retried', () => {

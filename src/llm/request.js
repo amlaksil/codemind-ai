@@ -1,5 +1,5 @@
 import { isReasoningModel } from './catalog.js';
-import { providerOf } from './providers.js';
+import { flexFor, providerOf } from './providers.js';
 
 /** The chat.completions request for one call. */
 export function buildRequest({ system, user, json = false, responseFormat, temperature = 0.5, model, maxTokens, reasoningEffort, serviceTier }) {
@@ -32,7 +32,8 @@ ${JSON.stringify(schema)}`
   if (provider.alwaysReasons && reasoningEffort) {
     request.reasoning_effort = ['none', 'minimal'].includes(reasoningEffort) ? 'low' : reasoningEffort;
   }
-  if (serviceTier && provider.flexTier) request.service_tier = serviceTier;
+  // Only where the model's family takes the tier (providers.js): GPT-4.1 refuses it with a 400.
+  if (serviceTier && flexFor(model)) request.service_tier = serviceTier;
   if (responseFormat) request.response_format = responseFormat;
   else if (json) request.response_format = { type: 'json_object' };
   return request;

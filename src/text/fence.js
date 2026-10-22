@@ -8,7 +8,11 @@
 // `neutralizeFenceTag` and `buildJobAdBlock` in packages/prompts/src/generate/emphasis/emphasis.ts,
 // with the attribute and self-closing tag forms from apps/desktop/src-tauri/src/prompt_fence.rs.
 
-/** Every tag a prompt of ours fences with. Each fenced body is scrubbed of all of them, not just its own. */
+/**
+ * The tags the package's own prompts fence with. Each fenced body is scrubbed of all of them,
+ * not just its own; `fenced()` adds whatever tag it is given, so an app-side fence
+ * (`hn_post`, `careers_page`, `application_question`) is closed only by the fence itself.
+ */
 export const FENCE_TAGS = ['job_posting', 'preference', 'company_site'];
 
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -16,22 +20,24 @@ const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Opening or closing, any case, spaces anywhere a parser would allow them, with attributes
 // (`<job_posting x="1">`) or self-closing (`<job_posting/>`). `[^>]*` cannot cross the `>` it
 // stops at, so the pattern is linear on any input.
-const PATTERNS = FENCE_TAGS.map((tag) => new RegExp(`<\\s*/?\\s*${escapeRegex(tag)}(?:(?:\\s|/)[^>]*)?\\s*>`, 'gi'));
+const patternFor = (tag) => new RegExp(`<\\s*/?\\s*${escapeRegex(tag)}(?:(?:\\s|/)[^>]*)?\\s*>`, 'gi');
+const PATTERNS = FENCE_TAGS.map(patternFor);
 
 /**
  * `text` with every fence tag in it made inert: its angle brackets become square ones, so
  * `</job_posting>` reads as `[/job_posting]`. Nothing else in the text changes, so keyword
- * matching and quotes against the posting are unaffected.
+ * matching and quotes against the posting are unaffected. `tags` adds tags beyond FENCE_TAGS.
  */
-export function neutralizeFenceTags(text) {
+export function neutralizeFenceTags(text, tags = []) {
   let out = String(text ?? '');
-  for (const pattern of PATTERNS) out = out.replace(pattern, (tag) => `[${tag.slice(1, -1)}]`);
+  const patterns = tags.length ? [...PATTERNS, ...tags.filter((t) => !FENCE_TAGS.includes(t)).map(patternFor)] : PATTERNS;
+  for (const pattern of patterns) out = out.replace(pattern, (tag) => `[${tag.slice(1, -1)}]`);
   return out;
 }
 
-/** `text`, cut to `cap` characters and scrubbed, inside `<tag>` and `</tag>`. */
+/** `text`, cut to `cap` characters and scrubbed (of `tag` too), inside `<tag>` and `</tag>`. */
 export function fenced(tag, text, cap = Infinity) {
-  return `<${tag}>\n${neutralizeFenceTags(String(text ?? '').slice(0, cap))}\n</${tag}>`;
+  return `<${tag}>\n${neutralizeFenceTags(String(text ?? '').slice(0, cap), [tag])}\n</${tag}>`;
 }
 
 export const JOB_POSTING_NOTE =

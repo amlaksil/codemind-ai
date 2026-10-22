@@ -40,10 +40,10 @@ function scoreTries() {
  * @param {import('../types.js').ResumeForm | string} resume The saved form, or a tailored resume's text.
  * @param {import('../types.js').Job} job
  * @param {import('../types.js').CallMeta} [meta]
- * @param {{ prior?: { requirements: object[], resumeText: string } | null }} [options] The source's own verdicts, for a rewrite's score.
+ * @param {{ prior?: { requirements: object[], resumeText: string } | null, serviceTier?: string }} [options] The source's own verdicts, for a rewrite's score; `serviceTier: 'flex'` for work nobody is waiting on (llm/complete.js).
  * @returns {Promise<import('../types.js').Scoring>}
  */
-export async function quickScoreResume(resume, job, meta = {}, { prior = null } = {}) {
+export async function quickScoreResume(resume, job, meta = {}, { prior = null, serviceTier } = {}) {
   const prompt = buildScorePrompt({ resume, job });
   const form = typeof resume === 'string' ? null : typeof resume?.toObject === 'function' ? resume.toObject() : resume;
   return withFallback(async ({ model, reasoningEffort }) => {
@@ -56,6 +56,7 @@ export async function quickScoreResume(resume, job, meta = {}, { prior = null } 
         json: true,
         responseFormat: SCORE_RESPONSE_FORMAT,
         temperature: 0,
+        serviceTier,
       },
       { ...meta, kind: 'score', promptVersion: PROMPT_VERSIONS.score }
     );
@@ -95,7 +96,7 @@ const JOB_REQUIREMENTS_PROMPT = `List what this job posting asks of a candidate:
  * @param {import('../types.js').CallMeta} [meta]
  * @returns {Promise<{ required: string[], preferred: string[], items: import('../types.js').Requirement[], version: string, model: string }>}
  */
-export async function extractJobRequirements(job, meta = {}) {
+export async function extractJobRequirements(job, meta = {}, { serviceTier } = {}) {
   const list = (value) => (Array.isArray(value) ? [...new Set(value.filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()))] : []);
   return withFallback(async ({ model, reasoningEffort }) => {
     const { data } = await complete(
@@ -107,6 +108,7 @@ export async function extractJobRequirements(job, meta = {}) {
         json: true,
         responseFormat: JOB_REQUIREMENTS_RESPONSE_FORMAT,
         temperature: 0,
+        serviceTier,
       },
       { ...meta, kind: 'job_requirements', promptVersion: PROMPT_VERSIONS.jobRequirements }
     );

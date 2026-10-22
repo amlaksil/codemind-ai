@@ -3,7 +3,10 @@
 // take, and a few habits of the request (request.js) — written here as flags, so adding a provider
 // is one entry rather than a branch in every file.
 //
-//   flexTier         OpenAI's half-price flex tier (service_tier: 'flex') exists here
+//   flexTier         OpenAI's half-price flex tier (service_tier: 'flex') exists here, for the
+//                    model families in flexModels only: GPT-4.1-mini answered a flex request
+//                    "400 Invalid service_tier argument" (2026-10-21), and the scorer's fallback
+//                    then ran on another model, so the tier is sent only where it is known to work
 //   thinkingSwitch   hybrid models that think unless told not to: enable_thinking follows the effort
 //   schemaInPrompt   response_format is accepted but not held to: the JSON schema goes in the prompt
 //   alwaysReasons    reasons at low, medium or high whatever the model; "none"/"minimal" become low
@@ -38,8 +41,18 @@ export const PROVIDERS = [
     timeoutMs: 60_000,
     notConfigured: 'AI features are not configured on this server',
     flexTier: true,
+    // The GPT-5 family (nano, mini, 5.6) and GPT-6 take it; the 4.x models do not.
+    flexModels: ['gpt-5', 'gpt-6', 'o3', 'o4'],
   },
 ];
+
+/** Whether a flex request may be sent for `model`: its provider has the tier and the model's family takes it. */
+export function flexFor(model) {
+  const provider = providerOf(model);
+  if (!provider.flexTier) return false;
+  const name = String(model || '').toLowerCase();
+  return (provider.flexModels || []).some((prefix) => name.startsWith(prefix));
+}
 
 const FALLBACK = PROVIDERS.find((p) => p.prefixes.length === 0);
 

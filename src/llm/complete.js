@@ -1,7 +1,7 @@
 import { AiError } from '../errors.js';
 import { isConfigured, log, models } from '../runtime.js';
 import { cachedTokensOf, costFor } from './catalog.js';
-import { providerOf } from './providers.js';
+import { flexFor } from './providers.js';
 import { clientFor, FLEX_TIMEOUT_MS } from './client.js';
 import { isFlexUnavailable, isOutOfCredits, isTransient } from './errors.js';
 import { buildRequest, unfence } from './request.js';
@@ -22,7 +22,9 @@ function sleep(ms) {
  * serviceTier, allowEmpty }, meta) → { text, data?, usage }
  * `json: true` asks for a JSON object response and parses it into `data`; `responseFormat` sends
  * a JSON schema instead. `serviceTier: 'flex'` asks OpenAI for its half-price flex tier, which
- * answers more slowly and refuses with a 429 when it has no capacity (isFlexUnavailable).
+ * answers more slowly and refuses with a 429 when it has no capacity (isFlexUnavailable); a model
+ * whose family does not take the tier (providers.js flexFor) runs on the standard tier as if it
+ * had not been asked.
  * `allowEmpty` returns an empty answer rather than throwing, for callers that treat it as a failed
  * attempt of their own.
  *
@@ -36,7 +38,7 @@ export async function complete(
 ) {
   if (!isConfigured()) throw new Error('The AI code was called before createCodemind() set it up');
   const client = clientFor(model);
-  const flex = serviceTier === 'flex' && Boolean(providerOf(model).flexTier);
+  const flex = serviceTier === 'flex' && flexFor(model);
   const started = Date.now();
   let lastErr;
 
@@ -86,13 +88,19 @@ export async function complete(
   });
   if (lastErr instanceof AiError) throw lastErr;
 
+  // Flex at capacity is OpenAI's answer on a busy day, not a failure of ours: the caller leaves the
+  // work for later or sends it on the standard tier, so it is a warning, not an error for Sentry.
+  if (isFlexUnavailable(lastErr)) {
+    log().warn({ model, status: lastErr?.status || lastErr?.statusCode }, 'flex tier at capacity');
+    throw new AiError(503, 'ai_flex_unavailable', 'OpenAI has no flex capacity right now.');
+  }
+
   log().error({ err: lastErr, model }, 'model call failed');
   const status = lastErr?.status || lastErr?.statusCode;
   if (status === 401) throw new AiError(503, 'ai_not_configured', 'The AI provider rejected the server key');
   if (isOutOfCredits(lastErr)) {
     throw new AiError(503, 'ai_no_credits', 'The AI provider account has no credits left. Add credits to continue.');
   }
-  if (isFlexUnavailable(lastErr)) throw new AiError(503, 'ai_flex_unavailable', 'OpenAI has no flex capacity right now.');
   if (status === 429) throw new AiError(503, 'ai_busy', 'The AI provider is busy. Try again in a minute.');
   throw AiError.upstream('The AI provider did not respond. Try again.');
 }

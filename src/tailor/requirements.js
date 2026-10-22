@@ -42,3 +42,25 @@ export function openRequirements(scoring, { allowedTerms = null, resumeText = ''
     .map(({ s, priority, id }) => ({ id, line: `[${priority} skill] ${s.skill} — ${s.verdict === 'weak' ? 'weak: listed under skills, not shown in a line of work' : 'missing'}` }));
   return [...requirements, ...skills];
 }
+
+/**
+ * The scoring with the gaps `ids` answered marked met, by the same numbering openRequirements
+ * gives them: a requirement's index, then the required skills, then (with `preferred`) the
+ * nice-to-haves. For a gap round that runs on the last score's verdicts rather than a fresh
+ * score (pipeline.js scoreRounds 'ends'): what one round wrote a line for, the next does not
+ * ask again. The score itself is not changed; only the real scorer moves it.
+ */
+export function markAnswered(scoring, ids, { preferred = false } = {}) {
+  const answered = new Set((ids || []).filter(Number.isInteger));
+  if (!answered.size || !scoring) return scoring;
+  const list = Array.isArray(scoring.requirements) ? scoring.requirements : [];
+  const required = Array.isArray(scoring.requiredSkillVerdicts) ? scoring.requiredSkillVerdicts : [];
+  const niceToHave = preferred && Array.isArray(scoring.preferredSkillVerdicts) ? scoring.preferredSkillVerdicts : [];
+  const met = (item, id) => (answered.has(id) && item ? { ...item, verdict: 'met' } : item);
+  return {
+    ...scoring,
+    requirements: list.map((r, id) => met(r, id)),
+    requiredSkillVerdicts: required.map((s, i) => met(s, list.length + i)),
+    ...(preferred && { preferredSkillVerdicts: niceToHave.map((s, i) => met(s, list.length + required.length + i)) }),
+  };
+}

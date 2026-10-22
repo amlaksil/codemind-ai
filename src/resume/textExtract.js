@@ -1,8 +1,15 @@
-import pdfParse from 'pdf-parse';
-import mammoth from 'mammoth';
 import { AiError } from '../errors.js';
 
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+// The two readers are loaded on the first upload of their kind, not with the module: pdf-parse
+// brings the whole of pdf.js and mammoth its own XML stack, several megabytes of heap each, and
+// most processes (a worker, a web process whose members upload nothing) never read a file. The
+// promise is kept so a second upload does not import again.
+let pdfParseLoading = null;
+let mammothLoading = null;
+const loadPdfParse = () => (pdfParseLoading ??= import('pdf-parse').then((m) => m.default));
+const loadMammoth = () => (mammothLoading ??= import('mammoth').then((m) => m.default));
 
 // A resume is a few pages; anything past this is not one, and every page costs time on the event loop.
 const MAX_PDF_PAGES = 40;
@@ -54,6 +61,7 @@ async function readText(buffer, mimeType, name) {
     try {
       // A copy of its own: a small Buffer is a slice of Node's shared pool, and pdf-parse's pdf.js
       // reads the whole underlying ArrayBuffer from offset 0, so it saw the pool and "bad XRef".
+      const pdfParse = await loadPdfParse();
       const data = await pdfParse(new Uint8Array(buffer), { max: MAX_PDF_PAGES, pagerender: renderPage });
       return data.text;
     } catch (err) {
@@ -62,6 +70,7 @@ async function readText(buffer, mimeType, name) {
   }
   if (mimeType === DOCX || name.endsWith('.docx')) {
     try {
+      const mammoth = await loadMammoth();
       const result = await mammoth.extractRawText({ buffer });
       return result.value;
     } catch (err) {

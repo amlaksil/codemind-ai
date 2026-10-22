@@ -10,6 +10,8 @@ export const PROMPT_VERSIONS = {
   interviewPrep: 'interviewPrep.v2',
   interviewFeedback: 'interviewFeedback.v1',
   referral: 'referral.v1',
+  founderIntro: 'founderIntro.v1',
   jobRequirements: 'jobRequirements.v4',
   jobEnrich: 'jobEnrich.v15',
+  screeningInterpret: 'screeningInterpret.v1',
 };
